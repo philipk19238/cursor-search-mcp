@@ -94,6 +94,12 @@ Or add to `opencode.json`:
 - `refresh_repo_info`: refresh repo detection
 - `list_indexed_repos`: show locally indexed repos
 
+## Acknowledgements
+
+Based on reverse engineering work from:
+- [cursor-rpc](https://github.com/everestmz/cursor-rpc) - Go library with protobuf definitions
+- [cursor-unchained](https://github.com/dcrebbin/cursor-unchained) - Cursor API reverse engineering
+
 ## Disclaimer
 
 Unofficial project; Cursor may change the API.
