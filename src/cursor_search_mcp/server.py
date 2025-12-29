@@ -123,7 +123,74 @@ def codebase_search(
     repo_owner: Optional[str] = None,
     repo_name: Optional[str] = None,
 ) -> str:
-    """Semantic search across the Cursor index."""
+    """Semantic search that finds code by meaning, not exact text.
+
+    ### When to Use This Tool
+
+    Use `codebase_search` when you need to:
+    - Explore unfamiliar codebases
+    - Ask "how / where / what" questions to understand behavior
+    - Find code by meaning rather than exact text
+
+    ### When NOT to Use
+
+    Skip `codebase_search` for:
+    1. Exact text matches (use `grep`)
+    2. Reading known files (use `read_file`)
+    3. Simple symbol lookups (use `grep`)
+    4. Find file by name (use `file_search`)
+
+    ### Examples
+
+    Good queries:
+    - "Where is interface MyInterface implemented in the frontend?"
+    - "Where do we encrypt user passwords before saving?"
+    - "How does user authentication work?"
+
+    Bad queries:
+    - "MyInterface frontend" - Too vague, use a specific question
+    - "AuthService" - Single word, use grep instead
+    - "What is AuthService? How does it work?" - Split into separate searches
+
+    ### Target Directories
+
+    Provide ONE directory or file path; [] searches the whole repo. No globs.
+
+    Good:
+    - ["backend/api/"] - focus directory
+    - ["src/components/Button.tsx"] - single file
+    - [] - search everywhere when unsure
+
+    Bad:
+    - ["frontend/", "backend/"] - multiple paths
+    - ["src/**/utils/**"] - globs
+    - ["*.ts"] - wildcards
+
+    ### Search Strategy
+
+    1. Start broad with [] if unsure where relevant code is
+    2. Review results; if a directory stands out, rerun with that as target
+    3. Break large questions into smaller ones
+    4. For big files (>1K lines), use codebase_search scoped to that file
+
+    ### Usage Notes
+
+    - When full chunk contents are provided, avoid re-reading the same chunks
+    - Sometimes only chunk signatures are shown; use read_file or grep to explore
+    - When reading chunks, consider expanding ranges to include imports
+
+    Args:
+        query: A complete question about what you want to understand.
+               Ask as if talking to a colleague: 'How does X work?',
+               'What happens when Y?', 'Where is Z handled?'
+        explanation: Why this tool is being used, how it contributes to goal.
+        target_directories: Directory paths to limit scope (single dir only).
+        repo_owner: Optional GitHub repo owner override.
+        repo_name: Optional GitHub repo name override.
+
+    Returns:
+        Formatted search results with file paths, line numbers, and snippets.
+    """
     query = (query or "").strip()
     if not query:
         return "Error: query is required."
