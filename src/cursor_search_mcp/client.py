@@ -28,7 +28,6 @@ class CodeChunk:
     start_line: int
     end_line: int
     score: float
-    language: Optional[str] = None
 
 
 @dataclass
