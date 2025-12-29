@@ -13,6 +13,8 @@ Cursor must index the repo. Open it in Cursor and wait for indexing to finish.
 ## Install
 
 ```bash
+git clone https://github.com/anthropics/cursor-search-mcp.git
+cd cursor-search-mcp
 uv venv
 source .venv/bin/activate
 uv pip install -e .
@@ -31,7 +33,9 @@ fastmcp run src/cursor_search_mcp/server.py
 ### Claude Code
 
 ```bash
-claude mcp add cursor-search -- cursor-search-mcp
+claude mcp add cursor-search -- \
+  env CURSOR_WORKSPACE_PATH=/path/to/your/repo \
+  uv run --directory /path/to/cursor-search-mcp cursor-search-mcp
 ```
 
 Or add to `~/.claude.json`:
@@ -40,7 +44,12 @@ Or add to `~/.claude.json`:
 {
   "mcpServers": {
     "cursor-search": {
-      "command": "cursor-search-mcp"
+      "command": "env",
+      "args": [
+        "CURSOR_WORKSPACE_PATH=/path/to/your/repo",
+        "uv", "run", "--directory", "/path/to/cursor-search-mcp",
+        "cursor-search-mcp"
+      ]
     }
   }
 }
@@ -49,30 +58,38 @@ Or add to `~/.claude.json`:
 ### OpenAI Codex
 
 ```bash
-codex mcp add cursor-search -- cursor-search-mcp
+codex mcp add cursor-search -- \
+  env CURSOR_WORKSPACE_PATH=/path/to/your/repo \
+  uv run --directory /path/to/cursor-search-mcp cursor-search-mcp
 ```
 
 Or add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.cursor-search]
-command = "cursor-search-mcp"
+command = "env"
+args = [
+  "CURSOR_WORKSPACE_PATH=/path/to/your/repo",
+  "uv", "run", "--directory", "/path/to/cursor-search-mcp",
+  "cursor-search-mcp"
+]
 ```
 
 ### OpenCode
 
-```bash
-opencode mcp add
-```
-
-Or add to `opencode.json`:
+Add to `opencode.json`:
 
 ```json
 {
   "mcp": {
     "cursor-search": {
       "type": "local",
-      "command": "cursor-search-mcp",
+      "command": "env",
+      "args": [
+        "CURSOR_WORKSPACE_PATH=/path/to/your/repo",
+        "uv", "run", "--directory", "/path/to/cursor-search-mcp",
+        "cursor-search-mcp"
+      ],
       "enabled": true
     }
   }
