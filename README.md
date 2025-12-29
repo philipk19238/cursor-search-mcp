@@ -26,6 +26,59 @@ cursor-search-mcp
 fastmcp run src/cursor_search_mcp/server.py
 ```
 
+## MCP Client Setup
+
+### Claude Code
+
+```bash
+claude mcp add cursor-search -- cursor-search-mcp
+```
+
+Or add to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "cursor-search": {
+      "command": "cursor-search-mcp"
+    }
+  }
+}
+```
+
+### OpenAI Codex
+
+```bash
+codex mcp add cursor-search -- cursor-search-mcp
+```
+
+Or add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cursor-search]
+command = "cursor-search-mcp"
+```
+
+### OpenCode
+
+```bash
+opencode mcp add
+```
+
+Or add to `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "cursor-search": {
+      "type": "local",
+      "command": "cursor-search-mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
 ## Config (optional)
 
 - `CURSOR_REPO_NAME` / `CURSOR_REPO_OWNER`
