@@ -11,7 +11,7 @@ from .encryption import build_path_encryption_scheme, encrypt_path
 from .git_utils import RepoInfo
 
 mcp = FastMCP(
-    "Cursor Codebase Search",
+    "Cursor Semantic Codebase Search",
     instructions="Semantic code search via Cursor's index.",
 )
 

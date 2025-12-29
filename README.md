@@ -13,10 +13,8 @@ Cursor must index the repo. Open it in Cursor and wait for indexing to finish.
 ## Install
 
 ```bash
-git clone https://github.com/anthropics/cursor-search-mcp.git
+git clone https://github.com/philipk19238/cursor-search-mcp.git
 cd cursor-search-mcp
-uv venv
-source .venv/bin/activate
 uv pip install -e .
 ```
 
