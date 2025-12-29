@@ -18,7 +18,6 @@ from .proto import (
     wrap_connect_envelope,
 )
 
-
 REPO_SERVICE_URL = "https://repo42.cursor.sh"
 
 
@@ -60,6 +59,7 @@ class CursorSearchClient:
         self.repo_name = repo_name
         self.repo_owner = repo_owner
         self.workspace_path = workspace_path
+        self.remote_url: Optional[str]
         if remote_url is not None:
             self.remote_url = remote_url
         elif is_local:
@@ -168,7 +168,8 @@ class CursorSearchClient:
                 return self._parse_proto_response(response.content, query)
 
             raise RuntimeError(
-                f"Search failed with status {response.status_code}: {response.text[:200]}"
+                f"Search failed with status {response.status_code}: "
+                f"{response.text[:200]}"
             )
 
         except httpx.RequestError as e:
@@ -181,10 +182,12 @@ class CursorSearchClient:
             try:
                 import json
 
-                json_start = data.find(b'{')
+                json_start = data.find(b"{")
                 if json_start != -1:
                     error_data = json.loads(data[json_start:])
-                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                    error_msg = error_data.get("error", {}).get(
+                        "message", "Unknown error"
+                    )
                     details = error_data.get("error", {}).get("details", [])
                     if details:
                         detail_info = details[0].get("debug", {}).get("details", {})
@@ -247,7 +250,9 @@ class CursorSearchClient:
             query=query,
         )
 
-    def _read_chunk_contents(self, file_path: str, start_line: int, end_line: int) -> str:
+    def _read_chunk_contents(
+        self, file_path: str, start_line: int, end_line: int
+    ) -> str:
         if not file_path:
             return ""
 

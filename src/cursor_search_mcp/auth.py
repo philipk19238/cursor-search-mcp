@@ -89,22 +89,28 @@ def get_credentials_from_db() -> CursorCredentials:
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
-        cursor.execute("SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'")
+        cursor.execute(
+            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'"
+        )
         access_token_row = cursor.fetchone()
 
-        cursor.execute("SELECT value FROM ItemTable WHERE key = 'cursorAuth/refreshToken'")
+        cursor.execute(
+            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/refreshToken'"
+        )
         refresh_token_row = cursor.fetchone()
 
         conn.close()
 
         if not access_token_row:
-            raise ValueError("Access token not found in Cursor database. Please log in to Cursor.")
+            raise ValueError(
+                "Access token not found in Cursor database. Please log in to Cursor."
+            )
 
         return CursorCredentials(
             access_token=access_token_row[0],
             refresh_token=refresh_token_row[0] if refresh_token_row else "",
         )
-    except sqlite3.OperationalError as e:
+    except sqlite3.OperationalError:
         # Database might be locked by Cursor, try using sqlite3 CLI
         return _get_credentials_via_cli(db_path)
 
@@ -113,13 +119,21 @@ def _get_credentials_via_cli(db_path: Path) -> CursorCredentials:
     """Get credentials using sqlite3 CLI (fallback for locked database)."""
     try:
         access_result = subprocess.run(
-            ["sqlite3", str(db_path), "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"],
+            [
+                "sqlite3",
+                str(db_path),
+                "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';",
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
         refresh_result = subprocess.run(
-            ["sqlite3", str(db_path), "SELECT value FROM ItemTable WHERE key = 'cursorAuth/refreshToken';"],
+            [
+                "sqlite3",
+                str(db_path),
+                "SELECT value FROM ItemTable WHERE key = 'cursorAuth/refreshToken';",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -138,7 +152,10 @@ def _get_credentials_via_cli(db_path: Path) -> CursorCredentials:
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to read Cursor credentials: {e}")
     except FileNotFoundError:
-        raise RuntimeError("sqlite3 CLI not found. Please install sqlite3 or close Cursor and try again.")
+        raise RuntimeError(
+            "sqlite3 CLI not found. Please install sqlite3 "
+            "or close Cursor and try again."
+        )
 
 
 def get_credentials() -> CursorCredentials:
@@ -173,6 +190,7 @@ def get_auth_id_from_token(access_token: str) -> Optional[str]:
         padding = "=" * (-len(payload_b64) % 4)
         payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
         payload = json.loads(payload_bytes.decode("utf-8"))
-        return payload.get("sub")
+        sub: str | None = payload.get("sub")
+        return sub
     except Exception:
         return None

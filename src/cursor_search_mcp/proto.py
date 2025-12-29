@@ -126,10 +126,10 @@ def encode_search_repository_request(
     )
 
     result = (
-        encode_string(1, query) +
-        encode_message(2, repo_info) +
-        encode_int32(3, top_k) +
-        encode_bool(5, rerank)
+        encode_string(1, query)
+        + encode_message(2, repo_info)
+        + encode_int32(3, top_k)
+        + encode_bool(5, rerank)
     )
 
     if glob_filter:
@@ -193,7 +193,7 @@ def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
 
 def decode_string(data: bytes, pos: int) -> tuple[str, int]:
     length, pos = decode_varint(data, pos)
-    value = data[pos:pos + length].decode("utf-8")
+    value = data[pos : pos + length].decode("utf-8")
     return value, pos + length
 
 
@@ -206,13 +206,13 @@ def decode_connect_envelope(data: bytes) -> list[bytes]:
             break
 
         flags = data[pos]
-        length = struct.unpack(">I", data[pos + 1:pos + 5])[0]
+        length = struct.unpack(">I", data[pos + 1 : pos + 5])[0]
         pos += 5
 
         if pos + length > len(data):
             break
 
-        message = data[pos:pos + length]
+        message = data[pos : pos + length]
         pos += length
 
         if flags & 0x02:
@@ -229,7 +229,9 @@ def decode_connect_envelope(data: bytes) -> list[bytes]:
     return messages
 
 
-def parse_code_result_with_classification(data: bytes, pos: int, end: int) -> Optional[dict]:
+def parse_code_result_with_classification(
+    data: bytes, pos: int, end: int
+) -> Optional[dict]:
     while pos < end:
         tag, pos = decode_varint(data, pos)
         field_number = tag >> 3
@@ -260,10 +262,10 @@ def parse_code_result(data: bytes, pos: int, end: int) -> dict:
             result["codeBlock"] = parse_code_block(data, pos, block_end)
             pos = block_end
         elif field_number == 2 and wire_type == 1:  # score (double)
-            result["score"] = struct.unpack("<d", data[pos:pos + 8])[0]
+            result["score"] = struct.unpack("<d", data[pos : pos + 8])[0]
             pos += 8
         elif field_number == 2 and wire_type == 5:  # score (float)
-            result["score"] = struct.unpack("<f", data[pos:pos + 4])[0]
+            result["score"] = struct.unpack("<f", data[pos : pos + 4])[0]
             pos += 4
         else:
             pos = skip_field(data, pos, wire_type)
@@ -316,7 +318,7 @@ def parse_code_block(data: bytes, pos: int, end: int) -> dict:
 
 
 def parse_range(data: bytes, pos: int, end: int) -> dict:
-    result = {"startPosition": {}, "endPosition": {}}
+    result: dict = {"startPosition": {}, "endPosition": {}}
 
     while pos < end:
         tag, pos = decode_varint(data, pos)

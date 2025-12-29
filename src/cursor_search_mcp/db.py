@@ -130,7 +130,9 @@ def _query_db_at_path(db_path: Path, query: str, params: tuple = ()) -> list:
         os.unlink(tmp_path)
 
 
-def _load_workspace_retrieval_state(workspace_path: Optional[str] = None) -> Optional[dict]:
+def _load_workspace_retrieval_state(
+    workspace_path: Optional[str] = None,
+) -> Optional[dict]:
     storage_dir = find_workspace_storage_dir(workspace_path)
     if storage_dir is None:
         return None
@@ -145,7 +147,8 @@ def _load_workspace_retrieval_state(workspace_path: Optional[str] = None) -> Opt
         return None
 
     try:
-        return json.loads(results[0][0])
+        parsed: dict = json.loads(results[0][0])
+        return parsed
     except json.JSONDecodeError:
         return None
 
@@ -231,7 +234,9 @@ def get_indexed_repos() -> list[IndexedRepo]:
     return repos
 
 
-def find_repo_for_workspace(workspace_path: Optional[str] = None) -> Optional[IndexedRepo]:
+def find_repo_for_workspace(
+    workspace_path: Optional[str] = None,
+) -> Optional[IndexedRepo]:
     if workspace_path is None:
         workspace_path = os.getcwd()
 

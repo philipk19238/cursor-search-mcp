@@ -5,10 +5,13 @@ from fastmcp import FastMCP
 
 from .auth import get_auth_id_from_token, get_credentials
 from .client import CursorSearchClient, SearchResult
-from .git_utils import get_repo_info, RepoInfo
-from .db import find_repo_for_workspace, get_repo_keys_for_workspace, list_indexed_repos_formatted
+from .db import (
+    find_repo_for_workspace,
+    get_repo_keys_for_workspace,
+    list_indexed_repos_formatted,
+)
 from .encryption import build_path_encryption_scheme, encrypt_path
-
+from .git_utils import RepoInfo, get_repo_info
 
 mcp = FastMCP(
     "Cursor Codebase Search",
@@ -97,15 +100,17 @@ def _format_search_results(result: SearchResult, explanation: str) -> str:
     output_parts.append("")
 
     for i, chunk in enumerate(result.chunks, 1):
-        output_parts.extend([
-            f"### {i}. {chunk.file_path}",
-            f"Lines {chunk.start_line}-{chunk.end_line} (score: {chunk.score:.3f})",
-            "",
-            "```",
-            chunk.content.strip(),
-            "```",
-            "",
-        ])
+        output_parts.extend(
+            [
+                f"### {i}. {chunk.file_path}",
+                f"Lines {chunk.start_line}-{chunk.end_line} (score: {chunk.score:.3f})",
+                "",
+                "```",
+                chunk.content.strip(),
+                "```",
+                "",
+            ]
+        )
 
     return "\n".join(output_parts)
 
@@ -159,7 +164,10 @@ def codebase_search(
 
             if result.metadata and "error" in result.metadata:
                 error_msg = result.metadata["error"]
-                if "not found" in error_msg.lower() or "not indexed" in error_msg.lower():
+                if (
+                    "not found" in error_msg.lower()
+                    or "not indexed" in error_msg.lower()
+                ):
                     return f"Codebase not indexed: {used_repo_owner}/{used_repo_name}"
                 return f"API error: {error_msg}"
 

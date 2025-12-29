@@ -77,13 +77,17 @@ class PlainTextEncryptionScheme:
         return value
 
 
-def build_path_encryption_scheme(key: Optional[str]) -> PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme:
+def build_path_encryption_scheme(
+    key: Optional[str],
+) -> PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme:
     if not key:
         return PlainTextEncryptionScheme()
     return V1MasterKeyedEncryptionScheme(key)
 
 
-def encrypt_path(path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme) -> str:
+def encrypt_path(
+    path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme
+) -> str:
     parts = _PATH_SPLIT_RE.split(path)
     out = []
     for part in parts:
@@ -94,7 +98,9 @@ def encrypt_path(path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEnc
     return "".join(out)
 
 
-def decrypt_path(path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme) -> str:
+def decrypt_path(
+    path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme
+) -> str:
     parts = _PATH_SPLIT_RE.split(path)
     out = []
     for part in parts:
@@ -105,7 +111,9 @@ def decrypt_path(path: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEnc
     return "".join(out)
 
 
-def encrypt_glob(pattern: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme) -> str:
+def encrypt_glob(
+    pattern: str, scheme: PlainTextEncryptionScheme | V1MasterKeyedEncryptionScheme
+) -> str:
     parts = _GLOB_SPLIT_RE.split(pattern)
     out = []
     for part in parts:

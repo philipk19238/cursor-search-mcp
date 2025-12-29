@@ -73,7 +73,9 @@ def detect_repo_info(workspace_path: Optional[str] = None) -> RepoInfo:
     try:
         owner, name = _parse_git_remote_url(remote_url)
     except ValueError as e:
-        raise ValueError(f"{e}. Set CURSOR_REPO_NAME and CURSOR_REPO_OWNER to override.")
+        raise ValueError(
+            f"{e}. Set CURSOR_REPO_NAME and CURSOR_REPO_OWNER to override."
+        )
 
     return RepoInfo(
         name=name,
@@ -104,7 +106,7 @@ def get_repo_info() -> RepoInfo:
             workspace_path=env_workspace or detected.workspace_path,
             remote_url=detected.remote_url,
         )
-    except ValueError as e:
+    except ValueError:
         if env_name or env_owner:
             raise ValueError("Set both CURSOR_REPO_NAME and CURSOR_REPO_OWNER.")
         raise
