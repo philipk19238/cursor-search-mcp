@@ -1,13 +1,20 @@
 """Cursor API client for semantic search."""
 
-import json
-import struct
 from dataclasses import dataclass
 from typing import Optional
 
 import httpx
 
 from .auth import CursorCredentials, generate_checksum, get_cursor_version
+from .proto import (
+    encode_search_repository_request,
+    encode_sem_search_request,
+    wrap_connect_envelope,
+    decode_connect_envelope,
+    parse_search_response,
+    encode_repository_info,
+    encode_message,
+)
 
 
 # API endpoints
@@ -60,43 +67,26 @@ class CursorSearchClient:
             "x-cursor-checksum": generate_checksum(),
             "content-type": "application/connect+proto",
             "connect-protocol-version": "1",
+            "accept": "application/connect+proto",
         }
 
-    def _encode_protobuf_message(self, data: dict) -> bytes:
-        """Encode a message as protobuf-like format for Connect protocol.
-
-        This is a simplified encoding - for full compatibility, use proper protobuf.
-        """
-        # For Connect protocol, we need to wrap in an envelope:
-        # 1 byte flags (0 = no compression)
-        # 4 bytes message length (big-endian)
-        # message bytes
-
-        # Since we don't have the full proto definitions compiled,
-        # we'll use JSON encoding with application/json content type instead
-        json_bytes = json.dumps(data).encode("utf-8")
-
-        # Connect protocol envelope
-        envelope = struct.pack(">BI", 0, len(json_bytes)) + json_bytes
-        return envelope
-
-    def _make_connect_request(
+    def _make_proto_request(
         self,
         base_url: str,
         service_path: str,
-        request_data: dict,
+        proto_data: bytes,
     ) -> httpx.Response:
-        """Make a Connect protocol request."""
+        """Make a Connect protocol request with protobuf encoding."""
         url = f"{base_url}/{service_path}"
-
         headers = self._get_headers()
-        # Use JSON for simplicity (Connect supports both proto and JSON)
-        headers["content-type"] = "application/json"
+
+        # Wrap in Connect envelope
+        envelope = wrap_connect_envelope(proto_data)
 
         response = self._client.post(
             url,
             headers=headers,
-            json=request_data,
+            content=envelope,
         )
         return response
 
@@ -118,118 +108,138 @@ class CursorSearchClient:
         Returns:
             SearchResult with matching code chunks
         """
-        # Build repository info
-        repository_info = {
-            "repoName": self.repo_name,
-            "repoOwner": self.repo_owner,
-            "relativeWorkspacePath": ".",
-        }
+        glob_filter = f"{target_directory}/**" if target_directory else None
 
-        # Build search request
-        request_data = {
-            "query": query,
-            "repository": repository_info,
-            "topK": top_k,
-            "rerank": rerank,
-        }
-
-        if target_directory:
-            request_data["globFilter"] = f"{target_directory}/**"
+        # Try SemSearch first (streaming endpoint)
+        proto_data = encode_sem_search_request(
+            query=query,
+            repo_name=self.repo_name,
+            repo_owner=self.repo_owner,
+            top_k=top_k,
+            rerank=rerank,
+            glob_filter=glob_filter,
+        )
 
         try:
-            response = self._make_connect_request(
+            response = self._make_proto_request(
                 REPO_SERVICE_URL,
-                "aiserver.v1.RepositoryService/SearchRepositoryV2",
-                request_data,
+                "aiserver.v1.RepositoryService/SemSearch",
+                proto_data,
             )
 
-            if response.status_code != 200:
-                # Try alternative endpoint
-                response = self._make_connect_request(
-                    REPO_SERVICE_URL,
-                    "aiserver.v1.RepositoryService/SemSearch",
-                    {"request": request_data},
-                )
+            if response.status_code == 200:
+                return self._parse_proto_response(response.content, query)
 
-            if response.status_code != 200:
-                raise RuntimeError(
-                    f"Search failed with status {response.status_code}: {response.text}"
-                )
+            # Try SearchRepositoryV2 as fallback
+            proto_data = encode_search_repository_request(
+                query=query,
+                repo_name=self.repo_name,
+                repo_owner=self.repo_owner,
+                top_k=top_k,
+                rerank=rerank,
+                glob_filter=glob_filter,
+            )
 
-            result_data = response.json()
-            return self._parse_search_response(result_data, query)
+            response = self._make_proto_request(
+                REPO_SERVICE_URL,
+                "aiserver.v1.RepositoryService/SearchRepositoryV2",
+                proto_data,
+            )
+
+            if response.status_code == 200:
+                return self._parse_proto_response(response.content, query)
+
+            # If still failing, try with different content type
+            raise RuntimeError(
+                f"Search failed with status {response.status_code}: {response.text[:200]}"
+            )
 
         except httpx.RequestError as e:
             raise RuntimeError(f"Search request failed: {e}")
 
-    def _parse_search_response(self, data: dict, query: str) -> SearchResult:
-        """Parse the search response into SearchResult."""
+    def _parse_proto_response(self, data: bytes, query: str) -> SearchResult:
+        """Parse protobuf response into SearchResult."""
         chunks = []
 
-        # Handle different response formats
-        code_results = data.get("codeResults", [])
-        if not code_results and "response" in data:
-            code_results = data["response"].get("codeResults", [])
+        # Check for error response (trailer frame with JSON error)
+        if data and data[0] == 0x02:  # Trailer frame flag
+            try:
+                import json
+                # Skip the 5-byte envelope header
+                json_start = data.find(b'{')
+                if json_start != -1:
+                    error_data = json.loads(data[json_start:])
+                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                    details = error_data.get("error", {}).get("details", [])
+                    if details:
+                        detail_info = details[0].get("debug", {}).get("details", {})
+                        error_msg = detail_info.get("detail", error_msg)
 
-        for result in code_results:
-            code_block = result.get("codeBlock", {})
+                    return SearchResult(
+                        chunks=[],
+                        query=query,
+                        metadata={"error": error_msg},
+                    )
+            except Exception:
+                pass
 
-            # Extract position info
-            range_info = code_block.get("range", {})
-            start_pos = range_info.get("startPosition", {})
-            end_pos = range_info.get("endPosition", {})
+        try:
+            # Decode Connect envelope(s)
+            messages = decode_connect_envelope(data)
 
-            chunk = CodeChunk(
-                file_path=code_block.get("relativeWorkspacePath", ""),
-                content=code_block.get("contents", ""),
-                start_line=start_pos.get("line", 0),
-                end_line=end_pos.get("line", 0),
-                score=result.get("score", 0.0),
+            for message in messages:
+                # Parse the search response
+                code_results = parse_search_response(message)
+
+                for result in code_results:
+                    code_block = result.get("codeBlock", {})
+                    range_info = code_block.get("range", {})
+                    start_pos = range_info.get("startPosition", {})
+                    end_pos = range_info.get("endPosition", {})
+
+                    chunk = CodeChunk(
+                        file_path=code_block.get("relativeWorkspacePath", ""),
+                        content=code_block.get("contents", ""),
+                        start_line=start_pos.get("line", 0),
+                        end_line=end_pos.get("line", 0),
+                        score=result.get("score", 0.0),
+                    )
+
+                    if chunk.file_path:  # Only add if we have a valid path
+                        chunks.append(chunk)
+
+        except Exception as e:
+            # If parsing fails, return empty result with error info
+            return SearchResult(
+                chunks=[],
+                query=query,
+                metadata={"parse_error": str(e), "raw_length": len(data)},
             )
-            chunks.append(chunk)
-
-        metadata = data.get("metadata", None)
 
         return SearchResult(
             chunks=chunks,
             query=query,
-            metadata=metadata,
         )
 
     def ensure_index_created(self) -> bool:
         """Ensure the repository index exists."""
-        repository_info = {
-            "repoName": self.repo_name,
-            "repoOwner": self.repo_owner,
-            "relativeWorkspacePath": ".",
-        }
+        repo_info = encode_repository_info(
+            repo_name=self.repo_name,
+            repo_owner=self.repo_owner,
+        )
+
+        # EnsureIndexCreatedRequest has repository at field 1
+        proto_data = encode_message(1, repo_info)
 
         try:
-            response = self._make_connect_request(
+            response = self._make_proto_request(
                 REPO_SERVICE_URL,
                 "aiserver.v1.RepositoryService/EnsureIndexCreated",
-                {"repository": repository_info},
+                proto_data,
             )
             return response.status_code == 200
         except httpx.RequestError:
             return False
-
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """Get embeddings for a list of texts."""
-        try:
-            response = self._make_connect_request(
-                REPO_SERVICE_URL,
-                "aiserver.v1.RepositoryService/GetEmbeddings",
-                {"texts": texts},
-            )
-
-            if response.status_code != 200:
-                raise RuntimeError(f"GetEmbeddings failed: {response.text}")
-
-            data = response.json()
-            return [emb.get("embedding", []) for emb in data.get("embeddings", [])]
-        except httpx.RequestError as e:
-            raise RuntimeError(f"GetEmbeddings request failed: {e}")
 
     def close(self):
         """Close the HTTP client."""

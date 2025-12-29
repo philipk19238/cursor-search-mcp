@@ -177,6 +177,25 @@ def codebase_search(
                 target_directory=target_dir,
                 rerank=True,
             )
+
+            # Check for API errors
+            if result.metadata and "error" in result.metadata:
+                error_msg = result.metadata["error"]
+                if "not found" in error_msg.lower() or "not indexed" in error_msg.lower():
+                    repo_info = _get_repo_info()
+                    return f"""Error: Codebase not indexed.
+
+The repository **{repo_info.owner}/{repo_info.name}** has not been indexed by Cursor yet.
+
+**To fix this:**
+1. Open this repository in Cursor IDE
+2. Wait for Cursor to index the codebase (check the status bar)
+3. Once indexing is complete, try the search again
+
+Alternatively, you can try the `ensure_codebase_indexed` tool to trigger indexing.
+"""
+                return f"API Error: {error_msg}"
+
             return _format_search_results(result, explanation)
 
     except FileNotFoundError as e:
