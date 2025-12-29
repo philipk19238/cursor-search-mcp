@@ -1,6 +1,7 @@
 """Authentication utilities for Cursor API."""
 
 import base64
+import json
 import os
 import platform
 import sqlite3
@@ -8,6 +9,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -153,9 +155,24 @@ def get_credentials() -> CursorCredentials:
 
 
 # Cursor client version - should be updated when Cursor updates
-CURSOR_VERSION = "0.50.5"
+CURSOR_VERSION = "2.3.10"
 
 
 def get_cursor_version() -> str:
     """Get the Cursor client version to use in API requests."""
     return os.environ.get("CURSOR_VERSION", CURSOR_VERSION)
+
+
+def get_auth_id_from_token(access_token: str) -> Optional[str]:
+    """Decode the Cursor auth token and return the auth ID (JWT sub)."""
+    if not access_token or "." not in access_token:
+        return None
+
+    try:
+        _, payload_b64, _ = access_token.split(".", 2)
+        padding = "=" * (-len(payload_b64) % 4)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        return payload.get("sub")
+    except Exception:
+        return None

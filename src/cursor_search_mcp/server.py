@@ -1,64 +1,105 @@
-"""MCP Server for Cursor's semantic codebase search."""
-
-import os
+from pathlib import Path
 from typing import Optional
 
 from fastmcp import FastMCP
 
-from .auth import get_credentials
+from .auth import get_auth_id_from_token, get_credentials
 from .client import CursorSearchClient, SearchResult
 from .git_utils import get_repo_info, RepoInfo
+from .cursor_db import find_repo_for_workspace, get_repo_keys_for_workspace, list_indexed_repos_formatted
+from .encryption import build_path_encryption_scheme, encrypt_path
 
 
-# Initialize the MCP server
 mcp = FastMCP(
     "Cursor Codebase Search",
-    instructions="Semantic codebase search powered by Cursor's vector database. Use codebase_search for finding code by meaning.",
+    instructions="Semantic code search via Cursor's index.",
 )
 
-# Cache for repo info (can be refreshed)
 _cached_repo_info: Optional[RepoInfo] = None
 
 
 def _get_repo_info(refresh: bool = False) -> RepoInfo:
-    """Get repository info, with caching."""
     global _cached_repo_info
 
     if _cached_repo_info is None or refresh:
-        _cached_repo_info = get_repo_info()
+        indexed_repo = None
+        try:
+            indexed_repo = find_repo_for_workspace()
+        except Exception:
+            indexed_repo = None
+
+        if indexed_repo:
+            _cached_repo_info = RepoInfo(
+                name=indexed_repo.name,
+                owner=indexed_repo.owner,
+                workspace_path=indexed_repo.local_path,
+                remote_url=f"https://github.com/{indexed_repo.owner}/{indexed_repo.name}",
+            )
+        else:
+            _cached_repo_info = get_repo_info()
 
     return _cached_repo_info
 
 
 def _get_search_client() -> CursorSearchClient:
-    """Get a configured search client."""
     credentials = get_credentials()
     repo_info = _get_repo_info()
+    auth_id = get_auth_id_from_token(credentials.access_token)
+    cursor_keys = get_repo_keys_for_workspace(repo_info.workspace_path)
+
+    if cursor_keys and auth_id:
+        repo_name = cursor_keys.repo_name
+        repo_owner = auth_id
+        orthogonal_transform_seed = cursor_keys.orthogonal_transform_seed
+        is_local = True
+        is_tracked = False
+        remote_url = None
+        path_encryption_key = cursor_keys.path_encryption_key
+        if path_encryption_key:
+            scheme = build_path_encryption_scheme(path_encryption_key)
+            workspace_uri = encrypt_path(
+                Path(repo_info.workspace_path).resolve().as_uri(),
+                scheme,
+            )
+        else:
+            workspace_uri = None
+    else:
+        repo_name = repo_info.name
+        repo_owner = repo_info.owner
+        orthogonal_transform_seed = None
+        is_local = False
+        is_tracked = True
+        remote_url = repo_info.remote_url
+        path_encryption_key = None
+        workspace_uri = None
 
     return CursorSearchClient(
         credentials=credentials,
-        repo_name=repo_info.name,
-        repo_owner=repo_info.owner,
+        repo_name=repo_name,
+        repo_owner=repo_owner,
         workspace_path=repo_info.workspace_path,
+        remote_url=remote_url,
+        is_tracked=is_tracked,
+        is_local=is_local,
+        orthogonal_transform_seed=orthogonal_transform_seed,
+        path_encryption_key=path_encryption_key,
+        workspace_uri=workspace_uri,
     )
 
 
 def _format_search_results(result: SearchResult, explanation: str) -> str:
-    """Format search results for display."""
     if not result.chunks:
-        return f"No results found for query: {result.query}"
+        return f"No results for: {result.query}"
 
-    output_parts = [
-        f"## Search Results for: {result.query}",
-        f"**Explanation:** {explanation}",
-        f"**Found {len(result.chunks)} relevant chunks:**",
-        "",
-    ]
+    output_parts = [f"## {result.query}", f"{len(result.chunks)} results"]
+    if explanation:
+        output_parts.append(f"Note: {explanation}")
+    output_parts.append("")
 
     for i, chunk in enumerate(result.chunks, 1):
         output_parts.extend([
-            f"### Result {i}: {chunk.file_path}",
-            f"**Lines {chunk.start_line}-{chunk.end_line}** (score: {chunk.score:.3f})",
+            f"### {i}. {chunk.file_path}",
+            f"Lines {chunk.start_line}-{chunk.end_line} (score: {chunk.score:.3f})",
             "",
             "```",
             chunk.content.strip(),
@@ -72,105 +113,43 @@ def _format_search_results(result: SearchResult, explanation: str) -> str:
 @mcp.tool
 def codebase_search(
     query: str,
-    explanation: str,
+    explanation: str = "",
     target_directories: Optional[list[str]] = None,
+    repo_owner: Optional[str] = None,
+    repo_name: Optional[str] = None,
 ) -> str:
-    """Semantic search that finds code by meaning, not exact text.
+    """Semantic search across the Cursor index."""
+    query = (query or "").strip()
+    if not query:
+        return "Error: query is required."
 
-    Use this tool when you need to:
-    - Explore unfamiliar codebases
-    - Ask "how / where / what" questions to understand behavior
-    - Find code by meaning rather than exact text
-
-    Do NOT use for:
-    - Exact text matches (use grep instead)
-    - Reading known files (use read_file instead)
-    - Simple symbol lookups (use grep instead)
-    - Finding files by name (use file_search instead)
-
-    Args:
-        query: A complete question about what you want to understand.
-               Ask as if talking to a colleague: 'How does X work?',
-               'What happens when Y?', 'Where is Z handled?'
-               BAD: Single words like "AuthService"
-               BAD: Multiple questions in one query
-               GOOD: "Where is interface MyInterface implemented in the frontend?"
-               GOOD: "Where do we encrypt user passwords before saving?"
-
-        explanation: One sentence explaining why this tool is being used
-                    and how it contributes to the goal.
-
-        target_directories: Prefix directory paths to limit search scope.
-                           Provide ONE directory or file path, or empty list
-                           to search the whole repo.
-                           GOOD: ["backend/api/"] - focus directory
-                           GOOD: ["src/components/Button.tsx"] - single file
-                           GOOD: [] - search everywhere when unsure
-                           BAD: ["frontend/", "backend/"] - multiple paths
-                           BAD: ["src/**/utils/**"] - globs
-                           BAD: ["*.ts"] - wildcards
-
-    Returns:
-        Formatted search results with file paths, line numbers, and code chunks.
-        When full chunk contents are provided, avoid re-reading the exact same
-        chunk contents using the read_file tool.
-
-    Examples:
-        # Good: Complete question with context
-        codebase_search(
-            query="Where is interface MyInterface implemented in the frontend?",
-            explanation="Find implementation location with specific context",
-            target_directories=["frontend/"]
-        )
-
-        # Good: Start broad, then narrow down
-        codebase_search(
-            query="How does user authentication work?",
-            explanation="Find auth flow in the codebase",
-            target_directories=[]
-        )
-
-        # Good: Scope to large file instead of reading entirely
-        codebase_search(
-            query="How are websocket connections handled?",
-            explanation="File is too large to read entirely",
-            target_directories=["backend/services/realtime.ts"]
-        )
-    """
-    # Validate inputs
-    if not query or len(query.strip()) < 10:
-        return (
-            "Error: Query too short. Please provide a complete question like "
-            "'How does X work?' or 'Where is Y handled?'"
-        )
-
-    # Check for common bad patterns
-    if query.count("?") > 1:
-        return (
-            "Error: Query contains multiple questions. Please split into separate "
-            "parallel searches for better results. For example, instead of "
-            "'What is AuthService? How does AuthService work?' use two separate calls."
-        )
-
-    # Handle target directories
     target_dir = None
     if target_directories:
-        if len(target_directories) > 1:
-            return (
-                "Error: Multiple target directories provided. Please provide only ONE "
-                "directory path, or use [] to search everywhere."
-            )
-        if target_directories[0]:
-            target_dir = target_directories[0]
-            # Check for glob patterns
-            if "*" in target_dir or "?" in target_dir:
-                return (
-                    "Error: Glob patterns are not supported. Please provide a specific "
-                    "directory path like 'src/components/' without wildcards."
-                )
+        for candidate in target_directories:
+            if candidate:
+                target_dir = candidate
+                break
 
     try:
-        with _get_search_client() as client:
+        if repo_owner and repo_name:
+            credentials = get_credentials()
+            remote_url = f"https://github.com/{repo_owner}/{repo_name}"
+            client = CursorSearchClient(
+                credentials=credentials,
+                repo_name=repo_name,
+                repo_owner=repo_owner,
+                workspace_path=".",
+                remote_url=remote_url,
+            )
+            used_repo_owner = repo_owner
+            used_repo_name = repo_name
+        else:
+            client = _get_search_client()
+            repo_info = _get_repo_info()
+            used_repo_owner = repo_info.owner
+            used_repo_name = repo_info.name
+
+        with client:
             result = client.search(
                 query=query,
                 top_k=10,
@@ -178,109 +157,91 @@ def codebase_search(
                 rerank=True,
             )
 
-            # Check for API errors
             if result.metadata and "error" in result.metadata:
                 error_msg = result.metadata["error"]
                 if "not found" in error_msg.lower() or "not indexed" in error_msg.lower():
-                    repo_info = _get_repo_info()
-                    return f"""Error: Codebase not indexed.
-
-The repository **{repo_info.owner}/{repo_info.name}** has not been indexed by Cursor yet.
-
-**To fix this:**
-1. Open this repository in Cursor IDE
-2. Wait for Cursor to index the codebase (check the status bar)
-3. Once indexing is complete, try the search again
-
-Alternatively, you can try the `ensure_codebase_indexed` tool to trigger indexing.
-"""
-                return f"API Error: {error_msg}"
+                    return f"Codebase not indexed: {used_repo_owner}/{used_repo_name}"
+                return f"API error: {error_msg}"
 
             return _format_search_results(result, explanation)
 
     except FileNotFoundError as e:
-        return f"Error: {e}\n\nPlease ensure Cursor is installed and you're logged in."
+        return f"Error: {e}"
     except Exception as e:
-        return f"Error performing search: {e}"
+        return f"Error: {e}"
 
 
 @mcp.tool
 def ensure_codebase_indexed() -> str:
-    """Ensure the current codebase is indexed for semantic search.
-
-    Call this before searching if you're not sure whether the codebase
-    has been indexed. This is typically only needed once per repository.
-
-    Returns:
-        Status message indicating whether indexing was successful.
-    """
+    """Ensure the current codebase index exists."""
     try:
         with _get_search_client() as client:
-            success = client.ensure_index_created()
-            if success:
-                return "Codebase index is ready for semantic search."
-            else:
-                return "Failed to ensure index. The repository may not be configured."
+            return (
+                "Codebase index is ready."
+                if client.ensure_index_created()
+                else "Codebase index not ready."
+            )
     except FileNotFoundError as e:
-        return f"Error: {e}\n\nPlease ensure Cursor is installed and you're logged in."
+        return f"Error: {e}"
     except Exception as e:
-        return f"Error ensuring index: {e}"
+        return f"Error: {e}"
 
 
 @mcp.tool
 def refresh_repo_info() -> str:
-    """Refresh the repository information by re-detecting from git.
-
-    Use this after switching branches, changing directories, or if the
-    repository info seems stale. The server will re-read the git remote
-    URL and update the cached repo name and owner.
-
-    Returns:
-        Updated repository information.
-    """
+    """Refresh cached repository info."""
     try:
         repo_info = _get_repo_info(refresh=True)
-        return f"""Repository info refreshed successfully!
-
-- Repository: {repo_info.owner}/{repo_info.name}
-- Workspace: {repo_info.workspace_path}
-- Remote URL: {repo_info.remote_url or 'N/A'}
-"""
+        indexed_repo = find_repo_for_workspace(repo_info.workspace_path)
+        index_status = "indexed" if indexed_repo else "not indexed"
+        return (
+            f"{repo_info.owner}/{repo_info.name} ({index_status})\n"
+            f"{repo_info.workspace_path}"
+        )
     except Exception as e:
-        return f"Error refreshing repo info: {e}"
+        return f"Error: {e}"
+
+
+@mcp.tool
+def list_indexed_repos() -> str:
+    try:
+        return list_indexed_repos_formatted()
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 @mcp.resource("cursor://status")
 def get_status() -> str:
-    """Get the current status of the Cursor search integration."""
     try:
         credentials = get_credentials()
-        token_preview = credentials.access_token[:20] + "..." if credentials.access_token else "None"
+        auth_id = get_auth_id_from_token(credentials.access_token)
+        auth_status = "configured" if credentials.access_token else "missing"
 
-        # Try to get repo info
         try:
             repo_info = _get_repo_info()
             repo_str = f"{repo_info.owner}/{repo_info.name}"
             workspace_str = repo_info.workspace_path
-            remote_str = repo_info.remote_url or "N/A"
-            source_str = "auto-detected from git" if repo_info.remote_url else "environment variables"
+            cursor_keys = get_repo_keys_for_workspace(repo_info.workspace_path)
+            if cursor_keys and auth_id:
+                internal_str = f"{auth_id}/{cursor_keys.repo_name}"
+            else:
+                internal_str = "unavailable"
         except Exception as e:
             repo_str = f"Error: {e}"
-            workspace_str = os.getcwd()
-            remote_str = "N/A"
-            source_str = "not configured"
+            workspace_str = str(Path.cwd())
+            internal_str = "unavailable"
 
-        return f"""Cursor Search MCP Status:
-- Authentication: Configured (token: {token_preview})
-- Repository: {repo_str}
-- Workspace: {workspace_str}
-- Remote URL: {remote_str}
-- Config Source: {source_str}
-
-Tip: Use the refresh_repo_info tool to update after switching repos.
-"""
+        return (
+            "Cursor Search MCP\n"
+            f"- Auth: {auth_status}\n"
+            f"- Repo: {repo_str}\n"
+            f"- Workspace: {workspace_str}\n"
+            f"- Internal Repo: {internal_str}\n"
+        )
     except Exception as e:
-        return f"Status check failed: {e}"
+        return f"Status error: {e}"
 
 
 def main():
