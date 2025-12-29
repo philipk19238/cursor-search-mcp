@@ -8,7 +8,6 @@ from .messages import (
     CodeResult,
     RepositoryInfo,
     SearchRepositoryRequest,
-    SearchRepositoryResponse,
     SemSearchRequest,
     SemSearchResponse,
 )
@@ -115,12 +114,6 @@ def build_sem_search_request(
     return SemSearchRequest(request=inner)
 
 
-# Legacy encode helpers
-
-def encode_search_repository_request(**kwargs) -> bytes:
-    return bytes(build_search_request(**kwargs))
-
-
 def encode_sem_search_request(**kwargs) -> bytes:
     return bytes(build_sem_search_request(**kwargs))
 
@@ -139,23 +132,20 @@ def decode_connect_envelope(data: bytes) -> list[bytes]:
             break
 
         flags = data[pos]
-        length = struct.unpack(">I", data[pos + 1:pos + 5])[0]
+        length = struct.unpack(">I", data[pos + 1 : pos + 5])[0]
         pos += 5
 
         if pos + length > len(data):
             break
 
-        message = data[pos:pos + length]
+        message = data[pos : pos + length]
         pos += length
 
         if flags & 0x02:
             continue
 
         if flags & 0x01:
-            try:
-                message = gzip.decompress(message)
-            except Exception:
-                pass
+            message = gzip.decompress(message)
 
         messages.append(message)
 
@@ -163,26 +153,15 @@ def decode_connect_envelope(data: bytes) -> list[bytes]:
 
 
 def parse_search_response(data: bytes) -> list[CodeResult]:
-    try:
-        sem_response = SemSearchResponse().parse(data)
-        if sem_response.code_results:
-            return [
-                item.code_result
-                for item in sem_response.code_results
-                if item.code_result and item.code_result.code_block
-            ]
-        if sem_response.response and sem_response.response.code_results:
-            return list(sem_response.response.code_results)
-    except Exception:
-        pass
-
-    try:
-        response = SearchRepositoryResponse().parse(data)
-        if response.code_results:
-            return list(response.code_results)
-    except Exception:
-        pass
-
+    sem_response = SemSearchResponse().parse(data)
+    if sem_response.code_results:
+        return [
+            item.code_result
+            for item in sem_response.code_results
+            if item.code_result and item.code_result.code_block
+        ]
+    if sem_response.response and sem_response.response.code_results:
+        return list(sem_response.response.code_results)
     return []
 
 
@@ -190,13 +169,11 @@ __all__ = [
     "CodeResult",
     "RepositoryInfo",
     "SearchRepositoryRequest",
-    "SearchRepositoryResponse",
     "SemSearchRequest",
     "SemSearchResponse",
     "build_repository_info",
     "build_search_request",
     "build_sem_search_request",
-    "encode_search_repository_request",
     "encode_sem_search_request",
     "wrap_connect_envelope",
     "decode_connect_envelope",

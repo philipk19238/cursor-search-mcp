@@ -77,10 +77,7 @@ def find_workspace_storage_dir(workspace_path: Optional[str] = None) -> Optional
         if not workspace_json.exists():
             continue
 
-        try:
-            data = json.loads(workspace_json.read_text())
-        except json.JSONDecodeError:
-            continue
+        data = json.loads(workspace_json.read_text())
 
         folder_uri = data.get("folder")
         folder_path = _parse_workspace_folder_uri(folder_uri) if folder_uri else None
@@ -113,7 +110,7 @@ def find_workspace_storage_dir(workspace_path: Optional[str] = None) -> Optional
 
 def _query_db_at_path(db_path: Path, query: str, params: tuple = ()) -> list:
     if not db_path.exists():
-        return []
+        raise FileNotFoundError(f"Cursor database not found at {db_path}")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".vscdb") as tmp:
         tmp_path = tmp.name
@@ -146,11 +143,7 @@ def _load_workspace_retrieval_state(
     if not results or not results[0][0]:
         return None
 
-    try:
-        parsed: dict = json.loads(results[0][0])
-        return parsed
-    except json.JSONDecodeError:
-        return None
+    return json.loads(results[0][0])
 
 
 def compute_legacy_repo_name(workspace_paths: list[str]) -> str:
@@ -203,10 +196,7 @@ def get_indexed_repos() -> list[IndexedRepo]:
     if not results or not results[0][0]:
         return []
 
-    try:
-        data = json.loads(results[0][0])
-    except json.JSONDecodeError:
-        return []
+    data = json.loads(results[0][0])
 
     repos = []
     for key, info in data.items():

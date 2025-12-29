@@ -6,13 +6,9 @@ from fastmcp import FastMCP
 
 from .auth import get_auth_id_from_token, get_credentials
 from .client import CursorSearchClient, SearchResult
-from .db import (
-    find_repo_for_workspace,
-    get_repo_keys_for_workspace,
-    list_indexed_repos_formatted,
-)
+from .db import get_repo_keys_for_workspace, list_indexed_repos_formatted
 from .encryption import build_path_encryption_scheme, encrypt_path
-from .git_utils import RepoInfo, get_repo_info
+from .git_utils import RepoInfo
 
 mcp = FastMCP(
     "Cursor Codebase Search",
@@ -34,20 +30,12 @@ def _get_repo_info(refresh: bool = False) -> RepoInfo:
 
     if _cached_repo_info is None or refresh:
         workspace_path = _get_workspace_path()
-        try:
-            indexed_repo = find_repo_for_workspace(str(workspace_path))
-        except Exception:
-            indexed_repo = None
-
-        if indexed_repo:
-            _cached_repo_info = RepoInfo(
-                name=indexed_repo.name,
-                owner=indexed_repo.owner,
-                workspace_path=str(workspace_path),
-                remote_url=f"https://github.com/{indexed_repo.owner}/{indexed_repo.name}",
-            )
-        else:
-            _cached_repo_info = get_repo_info()
+        repo_name = workspace_path.name
+        _cached_repo_info = RepoInfo(
+            name=repo_name,
+            owner="local",
+            workspace_path=str(workspace_path),
+        )
 
     return _cached_repo_info
 
@@ -266,8 +254,11 @@ def refresh_repo_info() -> str:
     """Refresh cached repository info."""
     try:
         repo_info = _get_repo_info(refresh=True)
-        indexed_repo = find_repo_for_workspace(repo_info.workspace_path)
-        index_status = "indexed" if indexed_repo else "not indexed"
+        index_status = (
+            "indexed"
+            if get_repo_keys_for_workspace(repo_info.workspace_path)
+            else "not indexed"
+        )
         return (
             f"{repo_info.owner}/{repo_info.name} ({index_status})\n"
             f"{repo_info.workspace_path}"

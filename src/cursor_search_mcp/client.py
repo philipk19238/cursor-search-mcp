@@ -11,7 +11,6 @@ from .encryption import build_path_encryption_scheme, decrypt_path, encrypt_glob
 from .proto import (
     build_repository_info,
     decode_connect_envelope,
-    encode_search_repository_request,
     encode_sem_search_request,
     parse_search_response,
     wrap_connect_envelope,
@@ -129,128 +128,85 @@ class CursorSearchClient:
             preferred_db_provider=self.preferred_db_provider,
         )
 
-        try:
-            response = self._make_proto_request(
-                REPO_SERVICE_URL,
-                "aiserver.v1.RepositoryService/SemSearch",
-                proto_data,
-            )
+        response = self._make_proto_request(
+            REPO_SERVICE_URL,
+            "aiserver.v1.RepositoryService/SemSearch",
+            proto_data,
+        )
 
-            if response.status_code == 200:
-                return self._parse_proto_response(response.content, query)
-
-            proto_data = encode_search_repository_request(
-                query=query,
-                repo_name=self.repo_name,
-                repo_owner=self.repo_owner,
-                top_k=top_k,
-                rerank=rerank,
-                glob_filter=glob_filter,
-                remote_url=self.remote_url,
-                is_tracked=self.is_tracked,
-                is_local=self.is_local,
-                num_files=self.num_files,
-                orthogonal_transform_seed=self.orthogonal_transform_seed,
-                preferred_embedding_model=self.preferred_embedding_model,
-                workspace_uri=self.workspace_uri,
-                preferred_db_provider=self.preferred_db_provider,
-            )
-
-            response = self._make_proto_request(
-                REPO_SERVICE_URL,
-                "aiserver.v1.RepositoryService/SearchRepositoryV2",
-                proto_data,
-            )
-
-            if response.status_code == 200:
-                return self._parse_proto_response(response.content, query)
-
+        if response.status_code != 200:
             raise RuntimeError(
                 f"Search failed with status {response.status_code}: "
                 f"{response.text[:200]}"
             )
 
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Search request failed: {e}")
+        return self._parse_proto_response(response.content, query)
 
     def _parse_proto_response(self, data: bytes, query: str) -> SearchResult:
         chunks = []
 
         if data and data[0] == 0x02:  # Trailer frame flag
-            try:
-                import json
+            import json
 
-                json_start = data.find(b"{")
-                if json_start != -1:
-                    error_data = json.loads(data[json_start:])
-                    error_msg = error_data.get("error", {}).get(
-                        "message", "Unknown error"
-                    )
-                    details = error_data.get("error", {}).get("details", [])
-                    if details:
-                        detail_info = details[0].get("debug", {}).get("details", {})
-                        error_msg = detail_info.get("detail", error_msg)
+            json_start = data.find(b"{")
+            if json_start == -1:
+                raise ValueError("Invalid trailer frame.")
+            error_data = json.loads(data[json_start:])
+            error_msg = error_data.get("error", {}).get(
+                "message", "Unknown error"
+            )
+            details = error_data.get("error", {}).get("details", [])
+            if details:
+                detail_info = details[0].get("debug", {}).get("details", {})
+                error_msg = detail_info.get("detail", error_msg)
 
-                    return SearchResult(
-                        chunks=[],
-                        query=query,
-                        metadata={"error": error_msg},
-                    )
-            except Exception:
-                pass
-
-        try:
-            messages = decode_connect_envelope(data)
-
-            for message in messages:
-                code_results = parse_search_response(message)
-
-                for result in code_results:
-                    block = result.code_block
-                    if not block:
-                        continue
-
-                    rng = block.range
-                    start_line = rng.start_position.line if rng else 0
-                    end_line = rng.end_position.line if rng else 0
-
-                    file_path = block.relative_workspace_path
-                    if file_path and self.path_encryption_key:
-                        try:
-                            file_path = decrypt_path(file_path, self._path_scheme)
-                        except Exception:
-                            pass
-
-                    content = (
-                        self._decode_text(block.contents)
-                        or self._decode_text(block.override_contents)
-                        or self._decode_text(block.file_contents)
-                        or self._decode_text(getattr(block, "original_contents", b""))
-                    )
-                    if not content and file_path:
-                        content = self._read_chunk_contents(
-                            file_path=file_path,
-                            start_line=start_line,
-                            end_line=end_line,
-                        )
-
-                    chunk = CodeChunk(
-                        file_path=file_path,
-                        content=content,
-                        start_line=start_line,
-                        end_line=end_line,
-                        score=result.score,
-                    )
-
-                    if chunk.file_path:
-                        chunks.append(chunk)
-
-        except Exception as e:
             return SearchResult(
                 chunks=[],
                 query=query,
-                metadata={"parse_error": str(e), "raw_length": len(data)},
+                metadata={"error": error_msg},
             )
+
+        messages = decode_connect_envelope(data)
+
+        for message in messages:
+            code_results = parse_search_response(message)
+
+            for result in code_results:
+                block = result.code_block
+                if not block:
+                    continue
+
+                rng = block.range
+                start_line = rng.start_position.line if rng else 0
+                end_line = rng.end_position.line if rng else 0
+
+                file_path = block.relative_workspace_path
+                if file_path and self.path_encryption_key:
+                    file_path = decrypt_path(file_path, self._path_scheme)
+
+                content = (
+                    self._decode_text(block.contents)
+                    or self._decode_text(block.override_contents)
+                    or self._decode_text(block.file_contents)
+                    or self._decode_text(getattr(block, "original_contents", b""))
+                )
+                if not content and file_path:
+                    content = self._read_chunk_contents(
+                        file_path=file_path,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+
+                chunk = CodeChunk(
+                    file_path=file_path,
+                    content=content,
+                    start_line=start_line,
+                    end_line=end_line,
+                    score=result.score,
+                )
+
+                if chunk.file_path:
+                    chunks.append(chunk)
 
         return SearchResult(
             chunks=chunks,
@@ -262,7 +218,7 @@ class CursorSearchClient:
         if not value:
             return ""
         if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
+            return value.decode("utf-8")
         return str(value)
 
     def _read_chunk_contents(
@@ -270,27 +226,23 @@ class CursorSearchClient:
     ) -> str:
         if not file_path:
             return ""
+        base = Path(self.workspace_path)
+        full_path = (base / file_path).resolve()
+        if not full_path.exists():
+            raise FileNotFoundError(f"Missing file: {full_path}")
 
-        try:
-            base = Path(self.workspace_path)
-            full_path = (base / file_path).resolve()
-            if not full_path.exists():
-                return ""
+        start_line = max(start_line, 1)
+        end_line = max(end_line, start_line)
 
-            start_line = max(start_line, 1)
-            end_line = max(end_line, start_line)
-
-            lines = []
-            with full_path.open("r", encoding="utf-8", errors="replace") as handle:
-                for i, line in enumerate(handle, start=1):
-                    if i < start_line:
-                        continue
-                    if i > end_line:
-                        break
-                    lines.append(line.rstrip("\n"))
-            return "\n".join(lines)
-        except Exception:
-            return ""
+        lines = []
+        with full_path.open("r", encoding="utf-8") as handle:
+            for i, line in enumerate(handle, start=1):
+                if i < start_line:
+                    continue
+                if i > end_line:
+                    break
+                lines.append(line.rstrip("\n"))
+        return "\n".join(lines)
 
     def ensure_index_created(self) -> bool:
         from .messages import EnsureIndexCreatedRequest
@@ -311,15 +263,12 @@ class CursorSearchClient:
         request = EnsureIndexCreatedRequest(repository_info=repo_info)
         proto_data = bytes(request)
 
-        try:
-            response = self._make_proto_request(
-                REPO_SERVICE_URL,
-                "aiserver.v1.RepositoryService/EnsureIndexCreated",
-                proto_data,
-            )
-            return response.status_code == 200
-        except httpx.RequestError:
-            return False
+        response = self._make_proto_request(
+            REPO_SERVICE_URL,
+            "aiserver.v1.RepositoryService/EnsureIndexCreated",
+            proto_data,
+        )
+        return response.status_code == 200
 
     def close(self):
         self._client.close()
