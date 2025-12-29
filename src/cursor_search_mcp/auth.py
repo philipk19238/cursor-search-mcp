@@ -20,15 +20,9 @@ class CursorCredentials:
 
 def get_cursor_dir() -> Path:
     """Get the Cursor application data directory."""
-    # Allow override via environment variable (useful for Docker)
     env_path = os.environ.get("CURSOR_CONFIG_PATH")
     if env_path:
         return Path(env_path)
-
-    # Check for Docker-mounted config at /root/.cursor
-    docker_path = Path("/root/.cursor")
-    if docker_path.exists():
-        return docker_path
 
     home = Path.home()
 
