@@ -87,6 +87,9 @@ Or add to `opencode.json`:
 - `CURSOR_CONFIG_PATH`
 - `CURSOR_VERSION`
 
+If the server is launched outside the repo, set `CURSOR_WORKSPACE_PATH` to the
+indexed workspace root. Startup fails if the workspace is not indexed.
+
 ## Tools
 
 - `codebase_search`: semantic search in the index

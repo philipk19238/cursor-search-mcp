@@ -222,10 +222,10 @@ class CursorSearchClient:
                             pass
 
                     content = (
-                        block.contents
-                        or block.override_contents
-                        or block.file_contents
-                        or ""
+                        self._decode_text(block.contents)
+                        or self._decode_text(block.override_contents)
+                        or self._decode_text(block.file_contents)
+                        or self._decode_text(getattr(block, "original_contents", b""))
                     )
                     if not content and file_path:
                         content = self._read_chunk_contents(
@@ -256,6 +256,14 @@ class CursorSearchClient:
             chunks=chunks,
             query=query,
         )
+
+    @staticmethod
+    def _decode_text(value: Optional[object]) -> str:
+        if not value:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
 
     def _read_chunk_contents(
         self, file_path: str, start_line: int, end_line: int

@@ -27,11 +27,11 @@ class CodeBlock(betterproto.Message):
     """A block of code from a file."""
 
     relative_workspace_path: str = betterproto.string_field(1)
-    file_contents: str = betterproto.string_field(2)
+    file_contents: bytes = betterproto.bytes_field(2)
     range: Range = betterproto.message_field(3)
-    contents: str = betterproto.string_field(4)
-    override_contents: str = betterproto.string_field(6)
-    original_contents: str = betterproto.string_field(7)
+    contents: bytes = betterproto.bytes_field(4)
+    override_contents: bytes = betterproto.bytes_field(6)
+    original_contents: bytes = betterproto.bytes_field(7)
 
 
 @dataclass
@@ -39,7 +39,7 @@ class CodeResult(betterproto.Message):
     """Search result with code block and score."""
 
     code_block: CodeBlock = betterproto.message_field(1)
-    score: float = betterproto.double_field(2)
+    score: float = betterproto.float_field(2)
 
 
 @dataclass

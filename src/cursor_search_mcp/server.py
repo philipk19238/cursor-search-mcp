@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -21,13 +22,20 @@ mcp = FastMCP(
 _cached_repo_info: Optional[RepoInfo] = None
 
 
+def _get_workspace_path() -> Path:
+    env_path = os.environ.get("CURSOR_WORKSPACE_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
 def _get_repo_info(refresh: bool = False) -> RepoInfo:
     global _cached_repo_info
 
     if _cached_repo_info is None or refresh:
-        indexed_repo = None
+        workspace_path = _get_workspace_path()
         try:
-            indexed_repo = find_repo_for_workspace()
+            indexed_repo = find_repo_for_workspace(str(workspace_path))
         except Exception:
             indexed_repo = None
 
@@ -35,7 +43,7 @@ def _get_repo_info(refresh: bool = False) -> RepoInfo:
             _cached_repo_info = RepoInfo(
                 name=indexed_repo.name,
                 owner=indexed_repo.owner,
-                workspace_path=indexed_repo.local_path,
+                workspace_path=str(workspace_path),
                 remote_url=f"https://github.com/{indexed_repo.owner}/{indexed_repo.name}",
             )
         else:
@@ -195,12 +203,7 @@ def codebase_search(
     if not query:
         return "Error: query is required."
 
-    target_dir = None
-    if target_directories:
-        for candidate in target_directories:
-            if candidate:
-                target_dir = candidate
-                break
+    target_dir = next((d for d in (target_directories or []) if d), None)
 
     try:
         if repo_owner and repo_name:
@@ -240,8 +243,6 @@ def codebase_search(
 
             return _format_search_results(result, explanation)
 
-    except FileNotFoundError as e:
-        return f"Error: {e}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -256,8 +257,6 @@ def ensure_codebase_indexed() -> str:
                 if client.ensure_index_created()
                 else "Codebase index not ready."
             )
-    except FileNotFoundError as e:
-        return f"Error: {e}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -281,8 +280,6 @@ def refresh_repo_info() -> str:
 def list_indexed_repos() -> str:
     try:
         return list_indexed_repos_formatted()
-    except FileNotFoundError as e:
-        return f"Error: {e}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -321,6 +318,16 @@ def get_status() -> str:
 
 def main():
     """Run the MCP server."""
+    workspace_path = _get_workspace_path()
+    if not workspace_path.exists():
+        raise SystemExit(f"Workspace path not found: {workspace_path}")
+
+    if not get_repo_keys_for_workspace(str(workspace_path)):
+        raise SystemExit(
+            "Workspace not indexed by Cursor. Open it in Cursor and wait for indexing "
+            f"to finish: {workspace_path}"
+        )
+
     mcp.run()
 
 

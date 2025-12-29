@@ -7,7 +7,6 @@ from typing import Optional
 from .messages import (
     CodeBlock,
     CodeResult,
-    CodeResultWithClassification,
     Position,
     Range,
     RepositoryInfo,
@@ -174,25 +173,196 @@ def decode_connect_envelope(data: bytes) -> list[bytes]:
     return messages
 
 
+def _decode_varint(data: bytes, pos: int) -> tuple[int, int]:
+    result = 0
+    shift = 0
+    while True:
+        byte = data[pos]
+        result |= (byte & 0x7F) << shift
+        pos += 1
+        if not (byte & 0x80):
+            break
+        shift += 7
+    return result, pos
+
+
+def _skip_field(data: bytes, pos: int, wire_type: int) -> int:
+    if wire_type == 0:  # varint
+        while data[pos] & 0x80:
+            pos += 1
+        pos += 1
+    elif wire_type == 1:  # 64-bit
+        pos += 8
+    elif wire_type == 2:  # length-delimited
+        length, pos = _decode_varint(data, pos)
+        pos += length
+    elif wire_type == 5:  # 32-bit
+        pos += 4
+    return pos
+
+
+def _decode_bytes(data: bytes, pos: int) -> tuple[bytes, int]:
+    length, pos = _decode_varint(data, pos)
+    return data[pos:pos + length], pos + length
+
+
+def _parse_position(data: bytes, pos: int, end: int) -> Position:
+    line = 0
+    column = 0
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 0:
+            line, pos = _decode_varint(data, pos)
+        elif field_number == 2 and wire_type == 0:
+            column, pos = _decode_varint(data, pos)
+        else:
+            pos = _skip_field(data, pos, wire_type)
+    return Position(line=line, column=column)
+
+
+def _parse_range(data: bytes, pos: int, end: int) -> Range:
+    start = Position()
+    end_pos = Position()
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            pos_end = pos + length
+            start = _parse_position(data, pos, pos_end)
+            pos = pos_end
+        elif field_number == 2 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            pos_end = pos + length
+            end_pos = _parse_position(data, pos, pos_end)
+            pos = pos_end
+        else:
+            pos = _skip_field(data, pos, wire_type)
+    return Range(start_position=start, end_position=end_pos)
+
+
+def _parse_code_block(data: bytes, pos: int, end: int) -> CodeBlock:
+    block = CodeBlock()
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 2:
+            raw, pos = _decode_bytes(data, pos)
+            block.relative_workspace_path = raw.decode("utf-8", errors="replace")
+        elif field_number == 2 and wire_type == 2:
+            block.file_contents, pos = _decode_bytes(data, pos)
+        elif field_number == 3 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            range_end = pos + length
+            block.range = _parse_range(data, pos, range_end)
+            pos = range_end
+        elif field_number == 4 and wire_type == 2:
+            block.contents, pos = _decode_bytes(data, pos)
+        elif field_number == 6 and wire_type == 2:
+            block.override_contents, pos = _decode_bytes(data, pos)
+        elif field_number == 7 and wire_type == 2:
+            block.original_contents, pos = _decode_bytes(data, pos)
+        else:
+            pos = _skip_field(data, pos, wire_type)
+    return block
+
+
+def _parse_code_result(data: bytes, pos: int, end: int) -> CodeResult:
+    code_block = CodeBlock()
+    score = 0.0
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            block_end = pos + length
+            code_block = _parse_code_block(data, pos, block_end)
+            pos = block_end
+        elif field_number == 2 and wire_type == 5:
+            score = struct.unpack("<f", data[pos:pos + 4])[0]
+            pos += 4
+        elif field_number == 2 and wire_type == 1:
+            score = struct.unpack("<d", data[pos:pos + 8])[0]
+            pos += 8
+        else:
+            pos = _skip_field(data, pos, wire_type)
+    return CodeResult(code_block=code_block, score=float(score))
+
+
+def _parse_code_result_with_classification(data: bytes, pos: int, end: int) -> Optional[CodeResult]:
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            item_end = pos + length
+            return _parse_code_result(data, pos, item_end)
+        pos = _skip_field(data, pos, wire_type)
+    return None
+
+
+def _parse_search_response_manual(data: bytes) -> list[CodeResult]:
+    results: list[CodeResult] = []
+    pos = 0
+    end = len(data)
+
+    def looks_like_path(value: str) -> bool:
+        if not value:
+            return False
+        if any(ord(ch) < 32 for ch in value):
+            return False
+        return value.startswith(("./", "/")) or "/" in value
+
+    while pos < end:
+        tag, pos = _decode_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x7
+        if field_number == 1 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            item_end = pos + length
+            payload = data[pos:item_end]
+            result = _parse_code_result(payload, 0, len(payload))
+            path = result.code_block.relative_workspace_path if result.code_block else ""
+            if path and looks_like_path(path):
+                results.append(result)
+            else:
+                results.extend(_parse_search_response_manual(payload))
+            pos = item_end
+        elif field_number == 3 and wire_type == 2:
+            length, pos = _decode_varint(data, pos)
+            item_end = pos + length
+            result = _parse_code_result_with_classification(data, pos, item_end)
+            if result and result.code_block:
+                path = result.code_block.relative_workspace_path
+                if path and looks_like_path(path):
+                    results.append(result)
+            pos = item_end
+        else:
+            pos = _skip_field(data, pos, wire_type)
+    return results
+
+
 def parse_search_response(data: bytes) -> list[CodeResult]:
     """Parse search response data into CodeResult objects."""
-    results: list[CodeResult] = []
-
-    # Try parsing as SemSearchResponse first
     try:
         sem_response = SemSearchResponse().parse(data)
         if sem_response.code_results:
-            for item in sem_response.code_results:
-                if item.code_result and item.code_result.code_block:
-                    results.append(item.code_result)
-            if results:
-                return results
+            return [
+                item.code_result
+                for item in sem_response.code_results
+                if item.code_result and item.code_result.code_block
+            ]
         if sem_response.response and sem_response.response.code_results:
             return list(sem_response.response.code_results)
     except Exception:
         pass
 
-    # Try parsing as SearchRepositoryResponse
     try:
         response = SearchRepositoryResponse().parse(data)
         if response.code_results:
@@ -200,53 +370,19 @@ def parse_search_response(data: bytes) -> list[CodeResult]:
     except Exception:
         pass
 
-    # Try parsing as a single CodeResult
-    try:
-        result = CodeResult().parse(data)
-        if result.code_block and result.code_block.relative_workspace_path:
-            return [result]
-    except Exception:
-        pass
-
-    return results
-
-
-def code_result_to_dict(result: CodeResult) -> dict:
-    """Convert a CodeResult to a dictionary (for backward compatibility)."""
-    block = result.code_block or CodeBlock()
-    rng = block.range or Range()
-    start = rng.start_position or Position()
-    end = rng.end_position or Position()
-
-    # Resolve contents
-    contents = block.contents
-    if not contents:
-        contents = block.override_contents or block.file_contents or ""
-
-    return {
-        "codeBlock": {
-            "relativeWorkspacePath": block.relative_workspace_path,
-            "contents": contents,
-            "range": {
-                "startPosition": {"line": start.line, "column": start.column},
-                "endPosition": {"line": end.line, "column": end.column},
-            },
-        },
-        "score": result.score,
-    }
+    return _parse_search_response_manual(data)
 
 
 # Re-export message types for convenience
 __all__ = [
-    "Position",
-    "Range",
     "CodeBlock",
     "CodeResult",
-    "CodeResultWithClassification",
+    "Position",
+    "Range",
     "RepositoryInfo",
     "SearchRepositoryRequest",
-    "SemSearchRequest",
     "SearchRepositoryResponse",
+    "SemSearchRequest",
     "SemSearchResponse",
     "build_repository_info",
     "build_search_request",
@@ -256,5 +392,4 @@ __all__ = [
     "wrap_connect_envelope",
     "decode_connect_envelope",
     "parse_search_response",
-    "code_result_to_dict",
 ]
