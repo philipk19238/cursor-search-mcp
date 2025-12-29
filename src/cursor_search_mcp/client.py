@@ -9,9 +9,8 @@ import httpx
 from .auth import CursorCredentials, generate_checksum, get_cursor_version
 from .encryption import build_path_encryption_scheme, decrypt_path, encrypt_glob
 from .proto import (
+    build_repository_info,
     decode_connect_envelope,
-    encode_message,
-    encode_repository_info,
     encode_search_repository_request,
     encode_sem_search_request,
     parse_search_response,
@@ -207,31 +206,40 @@ class CursorSearchClient:
                 code_results = parse_search_response(message)
 
                 for result in code_results:
-                    code_block = result.get("codeBlock", {})
-                    range_info = code_block.get("range", {})
-                    start_pos = range_info.get("startPosition", {})
-                    end_pos = range_info.get("endPosition", {})
-                    file_path = code_block.get("relativeWorkspacePath", "")
+                    block = result.code_block
+                    if not block:
+                        continue
+
+                    rng = block.range
+                    start_line = rng.start_position.line if rng else 0
+                    end_line = rng.end_position.line if rng else 0
+
+                    file_path = block.relative_workspace_path
                     if file_path and self.path_encryption_key:
                         try:
                             file_path = decrypt_path(file_path, self._path_scheme)
                         except Exception:
                             pass
 
-                    content = code_block.get("contents", "")
+                    content = (
+                        block.contents
+                        or block.override_contents
+                        or block.file_contents
+                        or ""
+                    )
                     if not content and file_path:
                         content = self._read_chunk_contents(
                             file_path=file_path,
-                            start_line=start_pos.get("line", 0),
-                            end_line=end_pos.get("line", 0),
+                            start_line=start_line,
+                            end_line=end_line,
                         )
 
                     chunk = CodeChunk(
                         file_path=file_path,
                         content=content,
-                        start_line=start_pos.get("line", 0),
-                        end_line=end_pos.get("line", 0),
-                        score=result.get("score", 0.0),
+                        start_line=start_line,
+                        end_line=end_line,
+                        score=result.score,
                     )
 
                     if chunk.file_path:
@@ -277,7 +285,9 @@ class CursorSearchClient:
             return ""
 
     def ensure_index_created(self) -> bool:
-        repo_info = encode_repository_info(
+        from .messages import EnsureIndexCreatedRequest
+
+        repo_info = build_repository_info(
             repo_name=self.repo_name,
             repo_owner=self.repo_owner,
             remote_url=self.remote_url,
@@ -290,7 +300,8 @@ class CursorSearchClient:
             preferred_db_provider=self.preferred_db_provider,
         )
 
-        proto_data = encode_message(1, repo_info)
+        request = EnsureIndexCreatedRequest(repository_info=repo_info)
+        proto_data = bytes(request)
 
         try:
             response = self._make_proto_request(
