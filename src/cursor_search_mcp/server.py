@@ -6,7 +6,7 @@ from fastmcp import FastMCP
 from .auth import get_auth_id_from_token, get_credentials
 from .client import CursorSearchClient, SearchResult
 from .git_utils import get_repo_info, RepoInfo
-from .cursor_db import find_repo_for_workspace, get_repo_keys_for_workspace, list_indexed_repos_formatted
+from .db import find_repo_for_workspace, get_repo_keys_for_workspace, list_indexed_repos_formatted
 from .encryption import build_path_encryption_scheme, encrypt_path
 
 
